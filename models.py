@@ -1,52 +1,53 @@
-import datetime
 from django.db import models
-from api import jsonapi
 
-from django.utils import timezone
+import tvhapi
 
 
-class Server(models.Model):
+class TVHServer(models.Model):
+    owner = models.ForeignKey('auth.User')
     name = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
-    port = models.PositiveIntegerField()
+    port = models.PositiveIntegerField(default=9981)
+    username = models.CharField(max_length=100, null=True, blank=True)
+    password = models.CharField(max_length=100, null=True, blank=True)
     active = models.BooleanField()
 
     def sync_dvr(self):
-        url = 'http://%s:%s' % (self.host, self.port)
-        dvr_finished = jsonapi.get_recordings(url=url, state='finished')
-        dvr_failed = jsonapi.get_recordings(url=url, state='failed')
-        dvr_upcoming = jsonapi.get_recordings(url=url, state='upcoming')
+        tvhapi.sync_dvr(self)
 
-        all_recordings = dvr_finished + dvr_failed + dvr_upcoming
-        qs = []
-        tz = timezone.get_current_timezone()
-        for rec in all_recordings:
-            uuid = rec.get('id', 'noid')
-            channel, c = Channel.objects.get_or_create(uuid=rec.get('channelid'), defaults={'name': rec.get('channel', 'No Channel Name')})
-            rec_data = {
-                'status': rec.get('status', 'No Status'),
-                'schedstate': rec.get('schedstate', 'No Schedule state'),
-                'startdt': timezone.make_aware(datetime.datetime.fromtimestamp(rec.get('start', 0)), timezone=tz),
-                'enddt': timezone.make_aware(datetime.datetime.fromtimestamp(rec.get('end', 0)), timezone=tz),
-                'title': rec.get('title', 'No Title'),
-                'channel': channel
-            }
+    def get_current_watching(self):
+        tvhapi.get_current_watching(server=self)
 
-            r, c = Recording.objects.get_or_create(uuid=uuid, server=self, defaults=rec_data)
-            if not c:
-                for k, v in rec_data.items():
-                    setattr(r, k, v)
-                r.save()
-
-            qs.append(r)
-
-        return qs
+    def base_url(self):
+        d = {
+            'username': self.username, 'password': self.password,
+            'host': self.host, 'port': self.port
+        }
+        return 'http://%(username)s:%(password)s@%(host)s:%(port)d' % d
 
     def __unicode__(self):
         return self.name
 
 
-class Channel(models.Model):
+class TVHNetwork(models.Model):
+    server = models.ForeignKey(TVHServer)
+    uuid = models.CharField(max_length=255, primary=True)
+    name = models.CharField(max_length=1000, null=True, blank=True)
+
+
+class TVHMux(models.Model):
+    uuid = models.CharField(max_length=255, primary=True)
+    name = models.CharField(max_length=1000, null=True, blank=True)
+    network = models.ForeignKey(TVHNetwork)
+
+
+class TVHService(models.Model):
+    mux = models.ForeignKey(TVHMux)
+    uuid = models.CharField(max_length=255, primary=True)
+
+
+class TVHChannel(models.Model):
+    service = models.ForeignKey(TVHService)
     uuid = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=1000, null=True, blank=True)
 
@@ -54,10 +55,10 @@ class Channel(models.Model):
         return self.name
 
 
-class Recording(models.Model):
-    server = models.ForeignKey(Server)
+class TVHRecording(models.Model):
+    server = models.ForeignKey(TVHServer)
     uuid = models.CharField(max_length=255)
-    channel = models.ForeignKey(Channel)
+    channel = models.ForeignKey(TVHChannel)
     title = models.CharField(max_length=1000)
     startdt = models.DateTimeField()
     enddt = models.DateTimeField()
@@ -67,10 +68,12 @@ class Recording(models.Model):
     schedstate = models.CharField(max_length=255)
 
 
-
-class RecordingDescription(models.Model):
-    recording = models.ForeignKey(Recording)
+class TVHRecordingDescription(models.Model):
+    recording = models.ForeignKey(TVHRecording)
     lang_code = models.CharField(max_length=255)
     description = models.TextField()
 
 
+class ChannelSet(models.Model):
+    owner = models.ForeignKey('auth.User')
+    name = models.CharField(max_length=100)

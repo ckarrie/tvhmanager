@@ -2,10 +2,11 @@ import datetime
 from django.db import models
 from api import jsonapi
 
-from django.utils import timezone
+import tvhapi
 
 
-class Server(models.Model):
+class TVHServer(models.Model):
+    owner = models.ForeignKey('auth.User')
     name = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
     port = models.PositiveIntegerField(default=9981)
@@ -29,44 +30,23 @@ class Server(models.Model):
 
 
     def sync_dvr(self):
-        url = 'http://%s:%s' % (self.host, self.port)
-        dvr_finished = jsonapi.get_recordings(url=url, state='finished')
-        dvr_failed = jsonapi.get_recordings(url=url, state='failed')
-        dvr_upcoming = jsonapi.get_recordings(url=url, state='upcoming')
+        tvhapi.sync_dvr(self)
 
-        all_recordings = dvr_finished + dvr_failed + dvr_upcoming
-        qs = []
-        tz = timezone.get_current_timezone()
-        for rec in all_recordings:
-            uuid = rec.get('id', 'noid')
-            channel, c = Channel.objects.get_or_create(uuid=rec.get('channelid'), defaults={'name': rec.get('channel', 'No Channel Name')})
-            rec_data = {
-                'status': rec.get('status', 'No Status'),
-                'schedstate': rec.get('schedstate', 'No Schedule state'),
-                'startdt': timezone.make_aware(datetime.datetime.fromtimestamp(rec.get('start', 0)), timezone=tz),
-                'enddt': timezone.make_aware(datetime.datetime.fromtimestamp(rec.get('end', 0)), timezone=tz),
-                'title': rec.get('title', 'No Title'),
-                'channel': channel
-            }
+    def get_current_watching(self):
+        tvhapi.get_current_watching(server=self)
 
-            r, c = Recording.objects.get_or_create(uuid=uuid, server=self, defaults=rec_data)
-            if not c:
-                for k, v in rec_data.items():
-                    setattr(r, k, v)
-                r.save()
-
-            qs.append(r)
-
-        return qs
-
-    def sync_channels(self):
-        pass
+    def base_url(self):
+        d = {
+            'username': self.username, 'password': self.password,
+            'host': self.host, 'port': self.port
+        }
+        return 'http://%(username)s:%(password)s@%(host)s:%(port)d' % d
 
     def __unicode__(self):
         return self.name
 
 
-class Network(models.Model):
+class TVHNetwork(models.Model):
     server = models.ForeignKey(Server)
     uuid = models.CharField(max_length=255, unique=True)
     networkname = models.CharField(max_length=255)
@@ -86,118 +66,8 @@ class Network(models.Model):
     def __unicode__(self):
         return self.networkname
 
-class Provider(models.Model):
-    name = models.CharField(max_length=255)
-
-    def __unicode__(self):
-        return self.name
-
-
-class Mux(models.Model):
-    network = models.ForeignKey(Network)
-    enabled = models.BooleanField(default=True)
-    uuid = models.CharField(max_length=255, unique=True)
-    delsys = models.CharField(max_length=255, choices=(
-        ('DVBS', 'DVB-S'),
-    ))
-    frequency = models.IntegerField(null=True, blank=True)
-    symbolrate = models.IntegerField(null=True, blank=True)
-    polarisation = models.CharField(max_length=10, null=True, blank=True, choices=(
-        ('H', 'horizontal'),
-        ('V', 'vertical')
-    ))
-    modulation = models.CharField(max_length=10, null=True, blank=True, choices=(
-        ('QPSK', 'QPSK'),
-    ))
-    fec = models.CharField(max_length=10, null=True, blank=True, choices=(
-        ('3/4', '3/4'),
-    ))
-    rolloff = models.IntegerField(null=True, blank=True)
-    pilot = models.CharField(max_length=10, null=True, blank=True, choices=(
-        ('AUTO', 'Auto (depends on tuner settings)'),
-    ))
-    stream_id = models.IntegerField(null=True, blank=True)
-    pls_mode = models.CharField(max_length=10, null=True, blank=True, choices=(
-        ('ROOT', 'Root'),
-        ('GOLD', 'Gold'),
-        ('COMBO', 'Combo'),
-    ))
-    pls_code = models.IntegerField(null=True, blank=True)
-    epg = models.IntegerField(null=True, blank=True)
-    onid = models.IntegerField(verbose_name='Original Network ID', null=True, blank=True)
-    tsid = models.IntegerField(verbose_name='Transport Stream ID', null=True, blank=True)
-    scan_result = models.IntegerField(null=True, blank=True, choices=(
-        # see /src/input/mpegts.h
-        (0, 'None'),
-        (1, 'Scan OK'),
-        (2, 'Scan failed')
-    ))
-    ac3_detection = models.IntegerField(null=True, blank=True, choices=(
-        (0, 'Standard'),
-        (1, 'AC3 = descriptor 6'),
-        (2, 'Ignore descriptor 5')
-    )) # pmt_06_ac3
-
-
-class Service(models.Model):
-    mux = models.ForeignKey(Mux)
-    uuid = models.CharField(max_length=255, unique=True)
-    enabled = models.BooleanField(default=True)
-    sid = models.IntegerField(verbose_name='Service ID')
-    lcn = models.IntegerField(default=0)
-    lcn_minor = models.IntegerField(default=0)
-    lcn2 = models.IntegerField(default=0)
-    svcname = models.CharField(max_length=500, verbose_name='Service Name')
-    provider = models.ForeignKey(Provider, null=True, blank=True)
-    dvb_servicetype = models.IntegerField(default=0)
-    dvb_ignore_eit = models.BooleanField(default=False)
-    prefcapid = models.IntegerField(default=0)
-    prefcapid_lock = models.IntegerField(default=0)
-    force_caid = models.IntegerField(default=0)
-    created_at = models.DateTimeField()
-    last_seen = models.DateTimeField()
-    auto = models.IntegerField(default=0)
-    priority = models.IntegerField(default=0)
-    pcr = models.IntegerField(default=0)
-    pmt = models.IntegerField(default=0)
-
-    def __unicode__(self):
-        if self.svcname:
-            return self.svcname
-        return "{%s}" % self.uuid
-
-
-class ServiceStream(models.Model):
-    service = models.ForeignKey(Service)
-    pid = models.IntegerField(default=0)
-    streamtype = models.CharField(max_length=255, choices=(
-        ('MPEG2VIDEO', 'MPEG2 Video'),
-        ('MPEG2AUDIO', 'MPEG2 Audio'),
-        ('AC3', 'AC3 Audio'),
-        ('TELETEXT', 'Teletext'),
-    ))
-    position = models.IntegerField(default=0)
-    width = models.IntegerField(null=True, blank=True)
-    height =  models.IntegerField(null=True, blank=True)
-    duration =  models.IntegerField(null=True, blank=True)
-    language = models.CharField(max_length=10, null=True, blank=True)
-    audio_type = models.IntegerField(default=0)
-    
-
-
-class EPGSource(models.Model):
-    epgid = models.CharField(max_length=255, choices=(
-        ('eit', 'EPG DVB Table'),
-        ('uk_freesat', 'UK Freesat'),
-        ('uk_freeview', 'UK Freeview'),
-        ('viasat_baltic', 'viasat_baltic'),
-        ('opentv-ausat', 'opentv-ausat'),
-        ('opentv-skyit', 'opentv-skyit')
-    ))
-    services = models.ManyToManyField(Service, null=True, blank=True, symmetrical=False)
-
-class ChannelTag(models.Model):
-    uuid = models.CharField(max_length=255, unique=True)
+class TVHMux(models.Model):
+    uuid = models.CharField(max_length=255, primary=True)
     name = models.CharField(max_length=1000, null=True, blank=True)
     enabled = models.BooleanField(default=True)
     sort_index = models.IntegerField(default=0)
@@ -210,11 +80,13 @@ class ChannelTag(models.Model):
     def __unicode__(self):
         return self.name
 
-    class Meta:
-        ordering = ('sort_index', 'name')
+class TVHService(models.Model):
+    mux = models.ForeignKey(TVHMux)
+    uuid = models.CharField(max_length=255, primary=True)
 
 
-class Channel(models.Model):
+class TVHChannel(models.Model):
+    service = models.ForeignKey(TVHService)
     uuid = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=1000, null=True, blank=True)
     enabled = models.BooleanField(default=True)
@@ -234,9 +106,8 @@ class Channel(models.Model):
     class Meta:
         ordering = ('name',)
 
-
-class Recording(models.Model):
-    server = models.ForeignKey(Server)
+class TVHRecording(models.Model):
+    server = models.ForeignKey(TVHServer)
     uuid = models.CharField(max_length=255)
     channel = models.ForeignKey(Channel)
     title = models.CharField(max_length=1000)
@@ -248,10 +119,12 @@ class Recording(models.Model):
     schedstate = models.CharField(max_length=255)
 
 
-
-class RecordingDescription(models.Model):
-    recording = models.ForeignKey(Recording)
+class TVHRecordingDescription(models.Model):
+    recording = models.ForeignKey(TVHRecording)
     lang_code = models.CharField(max_length=255)
     description = models.TextField()
 
 
+class ChannelSet(models.Model):
+    owner = models.ForeignKey('auth.User')
+    name = models.CharField(max_length=100)

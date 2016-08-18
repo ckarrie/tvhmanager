@@ -10,6 +10,7 @@ class TVHServer(models.Model):
     name = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
     port = models.PositiveIntegerField(default=9981)
+    htsp = models.PositiveIntegerField(default=9982)
     username = models.CharField(max_length=255, null=True, blank=True)
     password = models.CharField(max_length=255, null=True, blank=True)
     active = models.BooleanField(default=True)
@@ -28,12 +29,11 @@ class TVHServer(models.Model):
                     setattr(nw, k, v)
             nw.save()
 
-
     def sync_dvr(self):
         tvhapi.sync_dvr(self)
 
     def get_current_watching(self):
-        tvhapi.get_current_watching(server=self)
+        return tvhapi.get_current_watching(tvhserver=self)
 
     def base_url(self):
         d = {
@@ -47,7 +47,7 @@ class TVHServer(models.Model):
 
 
 class TVHNetwork(models.Model):
-    server = models.ForeignKey(Server)
+    server = models.ForeignKey(TVHServer)
     uuid = models.CharField(max_length=255, unique=True)
     networkname = models.CharField(max_length=255)
     orbital_pos = models.CharField(max_length=10)
@@ -66,8 +66,9 @@ class TVHNetwork(models.Model):
     def __unicode__(self):
         return self.networkname
 
+
 class TVHMux(models.Model):
-    uuid = models.CharField(max_length=255, primary=True)
+    uuid = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=1000, null=True, blank=True)
     enabled = models.BooleanField(default=True)
     sort_index = models.IntegerField(default=0)
@@ -80,22 +81,30 @@ class TVHMux(models.Model):
     def __unicode__(self):
         return self.name
 
+
 class TVHService(models.Model):
     mux = models.ForeignKey(TVHMux)
-    uuid = models.CharField(max_length=255, primary=True)
+    uuid = models.CharField(max_length=255, unique=True)
+
+
+class TVHEPGSource(models.Model):
+    uuid = models.UUIDField()
+
+
+class TVHChannelTag(models.Model):
+    uuid = models.UUIDField()
 
 
 class TVHChannel(models.Model):
-    service = models.ForeignKey(TVHService)
     uuid = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=1000, null=True, blank=True)
     enabled = models.BooleanField(default=True)
     number = models.IntegerField(default=0)
     user_icon_url = models.CharField(max_length=500, null=True, blank=True)
     auto_epg_channel = models.BooleanField(default=True)
-    epg_source = models.ForeignKey(EPGSource, null=True, blank=True)
-    services = models.ManyToManyField(Service, null=True, blank=True)
-    channeltags = models.ManyToManyField(ChannelTag, null=True, blank=True)
+    epg_source = models.ForeignKey(TVHEPGSource, null=True, blank=True)
+    services = models.ManyToManyField(TVHService, blank=False)
+    channeltags = models.ManyToManyField(TVHChannelTag, blank=True)
     dvr_pre = models.IntegerField(default=0)
     dvr_post = models.IntegerField(default=0)
     icon_url = models.CharField(max_length=500, null=True, blank=True)
@@ -106,10 +115,11 @@ class TVHChannel(models.Model):
     class Meta:
         ordering = ('name',)
 
+
 class TVHRecording(models.Model):
     server = models.ForeignKey(TVHServer)
     uuid = models.CharField(max_length=255)
-    channel = models.ForeignKey(Channel)
+    channel = models.ForeignKey(TVHChannel)
     title = models.CharField(max_length=1000)
     startdt = models.DateTimeField()
     enddt = models.DateTimeField()

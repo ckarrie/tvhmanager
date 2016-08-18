@@ -82,9 +82,9 @@ def post_data(url, auth=None, payload={}):
     return j
 
 
-def get_recordings(server, state):
+def get_recordings(url, state):
     if state == 'finished':
-        path = '/dvrlist_finished'
+        url = '/dvrlist_finished'
     elif state == 'upcoming':
         url += '/dvrlist_upcoming'
     elif state == 'failed':
